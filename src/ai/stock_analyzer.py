@@ -11,7 +11,10 @@ from dotenv import load_dotenv
 import logging
 from datetime import datetime
 
+# 加载环境变量
 load_dotenv()
+
+# 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -22,9 +25,11 @@ class StockAnalyzer:
         self.gemini_key = os.getenv('GEMINI_API_KEY')
     
     def preprocess_data(self, stock_data):
+        """预处理股票数据"""
         try:
             hist = stock_data['history']
             
+            # 计算技术指标
             hist['MA5'] = hist['Close'].rolling(window=5).mean()
             hist['MA20'] = hist['Close'].rolling(window=20).mean()
             hist['MA60'] = hist['Close'].rolling(window=60).mean()
@@ -32,29 +37,36 @@ class StockAnalyzer:
             hist['Price_Change'] = hist['Close'].pct_change()
             hist['Volatility'] = hist['Price_Change'].rolling(window=10).std() * (252 ** 0.5)
             
+            # 计算动量指标
             hist['Momentum'] = hist['Close'] - hist['Close'].shift(5)
             
+            # 计算相对强弱指标(RSI)
             delta = hist['Close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
             rs = gain / loss
             hist['RSI'] = 100 - (100 / (1 + rs))
             
+            # 计算MACD指标
             exp1 = hist['Close'].ewm(span=12, adjust=False).mean()
             exp2 = hist['Close'].ewm(span=26, adjust=False).mean()
             hist['MACD'] = exp1 - exp2
             hist['Signal'] = hist['MACD'].ewm(span=9, adjust=False).mean()
             hist['MACD_Hist'] = hist['MACD'] - hist['Signal']
             
+            # 计算布林带
             hist['BB_Middle'] = hist['Close'].rolling(window=20).mean()
             hist['BB_Upper'] = hist['BB_Middle'] + 2 * hist['Close'].rolling(window=20).std()
             hist['BB_Lower'] = hist['BB_Middle'] - 2 * hist['Close'].rolling(window=20).std()
             
+            # 计算威廉指标(Williams %R)
             hist['Williams_R'] = (hist['High'].rolling(window=14).max() - hist['Close']) / (hist['High'].rolling(window=14).max() - hist['Low'].rolling(window=14).min()) * -100
             
+            # 计算乖离率(BIAS)
             hist['BIAS5'] = (hist['Close'] - hist['MA5']) / hist['MA5'] * 100
             hist['BIAS20'] = (hist['Close'] - hist['MA20']) / hist['MA20'] * 100
             
+            # 移除NaN值
             hist = hist.dropna()
             
             return hist
@@ -63,10 +75,15 @@ class StockAnalyzer:
             return None
     
     def prepare_features(self, hist):
+        """准备特征和目标变量"""
         try:
+            # 特征列
             feature_columns = ['Open', 'High', 'Low', 'Volume', 'MA5', 'MA20', 'MA60', 'Volume_Change', 'Volatility', 'Momentum', 'RSI', 'MACD', 'Signal', 'MACD_Hist', 'BB_Middle', 'BB_Upper', 'BB_Lower', 'Williams_R', 'BIAS5', 'BIAS20']
             
+            # 目标变量：下一天的收盘价
             hist['Next_Close'] = hist['Close'].shift(-1)
+            
+            # 移除NaN值
             hist = hist.dropna()
             
             X = hist[feature_columns]
@@ -78,9 +95,12 @@ class StockAnalyzer:
             return None, None
     
     def train_model(self, X, y):
+        """训练模型"""
         try:
+            # 分割训练集和测试集
             X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
             
+            # 根据配置选择模型
             if self.ai_model == 'random_forest':
                 from sklearn.ensemble import RandomForestRegressor
                 model = RandomForestRegressor(n_estimators=100, random_state=42)
@@ -99,11 +119,14 @@ class StockAnalyzer:
                     from sklearn.ensemble import RandomForestRegressor
                     model = RandomForestRegressor(n_estimators=100, random_state=42)
             else:
+                # 默认使用随机森林
                 from sklearn.ensemble import RandomForestRegressor
                 model = RandomForestRegressor(n_estimators=100, random_state=42)
             
+            # 训练模型
             model.fit(X_train, y_train)
             
+            # 评估模型
             y_pred = model.predict(X_test)
             mse = mean_squared_error(y_test, y_pred)
             r2 = r2_score(y_test, y_pred)
@@ -116,6 +139,7 @@ class StockAnalyzer:
             return None, None, None, None
     
     def predict_stock(self, model, X):
+        """预测股票价格"""
         try:
             prediction = model.predict(X)
             return prediction
@@ -124,27 +148,35 @@ class StockAnalyzer:
             return None
     
     def analyze_stock(self, stock_data):
+        """分析单个股票"""
         try:
+            # 预处理数据
             hist = self.preprocess_data(stock_data)
             if hist is None:
                 return None
             
+            # 准备特征
             X, y = self.prepare_features(hist)
             if X is None or y is None:
                 return None
             
+            # 训练模型
             model, X_test, y_test, y_pred = self.train_model(X, y)
             if model is None:
                 return None
             
+            # 预测未来价格
             last_features = X.iloc[-1:]
             next_price_pred = self.predict_stock(model, last_features)
             
+            # 计算预测收益率
             current_price = stock_data['history']['Close'].iloc[-1]
             predicted_return = (next_price_pred[0] - current_price) / current_price * 100
             
+            # 应用策略逻辑
             strategy_result = self.apply_strategy(stock_data['history'])
             
+            # 分析结果
             analysis_result = {
                 'symbol': stock_data['symbol'],
                 'current_price': current_price,
@@ -157,6 +189,7 @@ class StockAnalyzer:
                 'strategy_analysis': strategy_result
             }
             
+            # 综合生成投资建议
             recommendation, confidence = self.generate_recommendation(predicted_return, strategy_result)
             analysis_result['recommendation'] = recommendation
             analysis_result['confidence'] = confidence
@@ -168,7 +201,7 @@ class StockAnalyzer:
             return None
     
     def apply_strategy(self, hist):
-        """应用策略逻辑：价格(3-70) + 周线量能粘合(-3%到+7%) + 5周均量向上 + 站稳25周线 + 当日成交额>5亿"""
+        """应用策略逻辑：价格(3-70) + 周线量能粘合(-3%到+7%) + 5周均量向上 + 站稳25周线(周K级别) + 当日成交额>5亿"""
         try:
             CFG_VOL_LOW = -0.03
             CFG_VOL_HIGH = 0.07
@@ -209,9 +242,13 @@ class StockAnalyzer:
                     raw_deviation = (latest_v5 - latest_v60) / latest_v60
                     result['volume_binding'] = CFG_VOL_LOW <= raw_deviation <= CFG_VOL_HIGH
             
-            if len(hist) >= 125:
-                ma125 = hist['Close'].rolling(125).mean().iloc[-1]
-                result['price_support'] = current_price > ma125
+            weekly_close = df_daily.groupby('week')['Close'].last()
+            
+            if len(weekly_close) >= 26:
+                ma25_weekly = weekly_close.rolling(25).mean().iloc[-1]
+                current_weekly_price = weekly_close.iloc[-1]
+                result['price_support'] = current_weekly_price > ma25_weekly
+                logger.info(f"周K级别: 价格{current_weekly_price:.2f}, 25周均线{ma25_weekly:.2f}")
             
             result['overall'] = result['price_in_range'] and result['volume_binding'] and result['volume_up'] and result['price_support'] and result['amount_ok']
             
@@ -228,9 +265,12 @@ class StockAnalyzer:
             }
     
     def generate_recommendation(self, predicted_return, strategy_result):
+        """综合生成投资建议"""
+        # 策略命中优先
         if strategy_result['overall']:
             return '买入', '高'
         
+        # 基于预测收益率
         if predicted_return > 2:
             return '买入', '高'
         elif predicted_return > 0:
@@ -239,6 +279,7 @@ class StockAnalyzer:
             return '卖出', '高'
     
     def analyze_all_stocks(self, stocks_data):
+        """分析所有股票"""
         try:
             analysis_results = []
             
@@ -247,6 +288,7 @@ class StockAnalyzer:
                 if result:
                     analysis_results.append(result)
             
+            # 按预测收益率排序
             analysis_results.sort(key=lambda x: x['predicted_return'], reverse=True)
             
             logger.info(f"成功分析 {len(analysis_results)} 个股票")
@@ -256,6 +298,7 @@ class StockAnalyzer:
             return []
     
     def analyze_with_gemini(self, stocks_data):
+        """使用 Gemini API 进行股票分析"""
         if not self.gemini_key:
             logger.warning("未配置 Gemini API 密钥，跳过 Gemini 分析")
             return None
@@ -265,6 +308,7 @@ class StockAnalyzer:
             now_str = now.strftime('%Y-%m-%d %H:%M')
             period_tag = "【早盘观察】" if now.hour < 12 else "【尾盘决策】"
             
+            # 准备分析数据
             stock_list = []
             for symbol, data in stocks_data.items():
                 if 'history' in data and not data['history'].empty:
@@ -276,6 +320,7 @@ class StockAnalyzer:
                 logger.error("没有可分析的股票数据")
                 return None
             
+            # 构建 Gemini API 请求
             api_url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={self.gemini_key}"
             
             prompt = (
@@ -292,9 +337,11 @@ class StockAnalyzer:
                 f"   - 未获星标的：仅在下方显示\"代码 名称\"。\n"
             )
             
+            # 发送请求
             response = requests.post(api_url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=60)
             response.raise_for_status()
             
+            # 解析响应
             result = response.json()
             ai_text = result["candidates"][0]["content"]["parts"][0]["text"]
             
@@ -305,9 +352,11 @@ class StockAnalyzer:
             return None
     
     def generate_analysis_report(self, analysis_results):
+        """生成分析报告"""
         try:
             report = "# 股票AI分析报告\n\n"
             
+            # 添加摘要
             report += "## 摘要\n"
             buy_count = sum(1 for r in analysis_results if r['recommendation'] == '买入')
             hold_count = sum(1 for r in analysis_results if r['recommendation'] == '持有')
@@ -318,6 +367,7 @@ class StockAnalyzer:
             report += f"- 持有建议: {hold_count} 个\n"
             report += f"- 卖出建议: {sell_count} 个\n\n"
             
+            # 添加详细分析
             report += "## 详细分析\n"
             for result in analysis_results:
                 report += f"### {result['symbol']}\n"
@@ -328,6 +378,7 @@ class StockAnalyzer:
                 report += f"- 置信度: {result['confidence']}\n"
                 report += f"- 模型R2分数: {result['model_performance']['r2']:.4f}\n"
                 
+                # 添加策略分析结果
                 if 'strategy_analysis' in result:
                     strategy = result['strategy_analysis']
                     report += f"- 策略分析: {'命中' if strategy['overall'] else '未命中'}\n"
@@ -345,15 +396,19 @@ class StockAnalyzer:
             return "生成分析报告失败"
 
 if __name__ == "__main__":
+    # 测试AI分析模块
     from src.github.stock_data import StockDataFetcher
     
+    # 获取股票数据
     fetcher = StockDataFetcher()
     stocks_data = fetcher.fetch_all_stocks_data()
     
     if stocks_data:
+        # 分析股票
         analyzer = StockAnalyzer()
         analysis_results = analyzer.analyze_all_stocks(stocks_data)
         
         if analysis_results:
+            # 生成报告
             report = analyzer.generate_analysis_report(analysis_results)
             print(report)
