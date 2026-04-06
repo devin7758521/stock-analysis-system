@@ -2,9 +2,11 @@ import os
 import pandas as pd
 import numpy as np
 import requests
+import json
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
+import matplotlib.pyplot as plt
 from dotenv import load_dotenv
 import logging
 from datetime import datetime
@@ -30,6 +32,8 @@ class StockAnalyzer:
             hist['Price_Change'] = hist['Close'].pct_change()
             hist['Volatility'] = hist['Price_Change'].rolling(window=10).std() * (252 ** 0.5)
             
+            hist['Momentum'] = hist['Close'] - hist['Close'].shift(5)
+            
             delta = hist['Close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -46,7 +50,13 @@ class StockAnalyzer:
             hist['BB_Upper'] = hist['BB_Middle'] + 2 * hist['Close'].rolling(window=20).std()
             hist['BB_Lower'] = hist['BB_Middle'] - 2 * hist['Close'].rolling(window=20).std()
             
-            hist.dropna(inplace=True)
+            hist['Williams_R'] = (hist['High'].rolling(window=14).max() - hist['Close']) / (hist['High'].rolling(window=14).max() - hist['Low'].rolling(window=14).min()) * -100
+            
+            hist['BIAS5'] = (hist['Close'] - hist['MA5']) / hist['MA5'] * 100
+            hist['BIAS20'] = (hist['Close'] - hist['MA20']) / hist['MA20'] * 100
+            
+            hist = hist.dropna()
+            
             return hist
         except Exception as e:
             logger.error(f"预处理数据失败: {e}")
@@ -54,7 +64,7 @@ class StockAnalyzer:
     
     def prepare_features(self, hist):
         try:
-            feature_columns = ['Open', 'High', 'Low', 'Volume', 'MA5', 'MA20', 'MA60', 'Volume_Change', 'Volatility', 'RSI', 'MACD', 'Signal', 'MACD_Hist', 'BB_Middle', 'BB_Upper', 'BB_Lower']
+            feature_columns = ['Open', 'High', 'Low', 'Volume', 'MA5', 'MA20', 'MA60', 'Volume_Change', 'Volatility', 'Momentum', 'RSI', 'MACD', 'Signal', 'MACD_Hist', 'BB_Middle', 'BB_Upper', 'BB_Lower', 'Williams_R', 'BIAS5', 'BIAS20']
             
             hist['Next_Close'] = hist['Close'].shift(-1)
             hist = hist.dropna()
@@ -71,7 +81,27 @@ class StockAnalyzer:
         try:
             X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
             
-            model = RandomForestRegressor(n_estimators=100, random_state=42)
+            if self.ai_model == 'random_forest':
+                from sklearn.ensemble import RandomForestRegressor
+                model = RandomForestRegressor(n_estimators=100, random_state=42)
+            elif self.ai_model == 'linear_regression':
+                from sklearn.linear_model import LinearRegression
+                model = LinearRegression()
+            elif self.ai_model == 'decision_tree':
+                from sklearn.tree import DecisionTreeRegressor
+                model = DecisionTreeRegressor(random_state=42)
+            elif self.ai_model == 'xgboost':
+                try:
+                    from xgboost import XGBRegressor
+                    model = XGBRegressor(random_state=42)
+                except ImportError:
+                    logger.warning("XGBoost库未安装，使用随机森林模型")
+                    from sklearn.ensemble import RandomForestRegressor
+                    model = RandomForestRegressor(n_estimators=100, random_state=42)
+            else:
+                from sklearn.ensemble import RandomForestRegressor
+                model = RandomForestRegressor(n_estimators=100, random_state=42)
+            
             model.fit(X_train, y_train)
             
             y_pred = model.predict(X_test)
@@ -84,6 +114,14 @@ class StockAnalyzer:
         except Exception as e:
             logger.error(f"训练模型失败: {e}")
             return None, None, None, None
+    
+    def predict_stock(self, model, X):
+        try:
+            prediction = model.predict(X)
+            return prediction
+        except Exception as e:
+            logger.error(f"预测股票价格失败: {e}")
+            return None
     
     def analyze_stock(self, stock_data):
         try:
@@ -100,7 +138,7 @@ class StockAnalyzer:
                 return None
             
             last_features = X.iloc[-1:]
-            next_price_pred = model.predict(last_features)
+            next_price_pred = self.predict_stock(model, last_features)
             
             current_price = stock_data['history']['Close'].iloc[-1]
             predicted_return = (next_price_pred[0] - current_price) / current_price * 100
@@ -112,7 +150,10 @@ class StockAnalyzer:
                 'current_price': current_price,
                 'predicted_next_price': next_price_pred[0],
                 'predicted_return': predicted_return,
-                'model_performance': {'mse': mean_squared_error(y_test, y_pred), 'r2': r2_score(y_test, y_pred)},
+                'model_performance': {
+                    'mse': mean_squared_error(y_test, y_pred),
+                    'r2': r2_score(y_test, y_pred)
+                },
                 'strategy_analysis': strategy_result
             }
             
@@ -127,6 +168,7 @@ class StockAnalyzer:
             return None
     
     def apply_strategy(self, hist):
+        """应用策略逻辑：价格(3-70) + 周线量能粘合(-3%到+7%) + 5周均量向上 + 站稳25周线"""
         try:
             CFG_VOL_LOW = -0.03
             CFG_VOL_HIGH = 0.07
@@ -146,6 +188,8 @@ class StockAnalyzer:
             df_daily['week'] = df_daily.index.to_period('W')
             weekly_volumes = df_daily.groupby('week')['Volume'].sum()
             
+            logger.info(f"使用原始周量数据，共{len(weekly_volumes)}周")
+            
             if len(weekly_volumes) >= 61:
                 v5 = weekly_volumes.rolling(5).mean()
                 v60 = weekly_volumes.rolling(60).mean()
@@ -155,7 +199,6 @@ class StockAnalyzer:
                 
                 if not pd.isna(latest_v5) and not pd.isna(latest_v60) and latest_v60 > 0:
                     result['volume_up'] = latest_v5 > v5.iloc[-2] if len(v5) > 1 else False
-                    
                     raw_deviation = (latest_v5 - latest_v60) / latest_v60
                     result['volume_binding'] = CFG_VOL_LOW <= raw_deviation <= CFG_VOL_HIGH
             
@@ -168,7 +211,13 @@ class StockAnalyzer:
             return result
         except Exception as e:
             logger.error(f"应用策略失败: {e}")
-            return {'price_in_range': False, 'volume_binding': False, 'volume_up': False, 'price_support': False, 'overall': False}
+            return {
+                'price_in_range': False,
+                'volume_binding': False,
+                'volume_up': False,
+                'price_support': False,
+                'overall': False
+            }
     
     def generate_recommendation(self, predicted_return, strategy_result):
         if strategy_result['overall']:
@@ -269,9 +318,33 @@ class StockAnalyzer:
                 report += f"- 预测收益率: {result['predicted_return']:.2f}%\n"
                 report += f"- 建议: {result['recommendation']}\n"
                 report += f"- 置信度: {result['confidence']}\n"
-                report += f"- 模型R2分数: {result['model_performance']['r2']:.4f}\n\n"
+                report += f"- 模型R2分数: {result['model_performance']['r2']:.4f}\n"
+                
+                if 'strategy_analysis' in result:
+                    strategy = result['strategy_analysis']
+                    report += f"- 策略分析: {'命中' if strategy['overall'] else '未命中'}\n"
+                    report += f"  - 价格范围: {'符合' if strategy['price_in_range'] else '不符合'}\n"
+                    report += f"  - 量能粘合: {'符合' if strategy['volume_binding'] else '不符合'}\n"
+                    report += f"  - 量能向上: {'符合' if strategy['volume_up'] else '不符合'}\n"
+                    report += f"  - 站稳均线: {'符合' if strategy['price_support'] else '不符合'}\n"
+                
+                report += "\n"
             
             return report
         except Exception as e:
             logger.error(f"生成分析报告失败: {e}")
             return "生成分析报告失败"
+
+if __name__ == "__main__":
+    from src.github.stock_data import StockDataFetcher
+    
+    fetcher = StockDataFetcher()
+    stocks_data = fetcher.fetch_all_stocks_data()
+    
+    if stocks_data:
+        analyzer = StockAnalyzer()
+        analysis_results = analyzer.analyze_all_stocks(stocks_data)
+        
+        if analysis_results:
+            report = analyzer.generate_analysis_report(analysis_results)
+            print(report)
