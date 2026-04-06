@@ -2,7 +2,8 @@ name: Stock Analysis Workflow
 
 on:
   schedule:
-    - cron: '0 1 * * *'
+    # 每周四下午4点运行（北京时间，UTC+8 对应 UTC 的 08:00）
+    - cron: '0 8 * * 4'
   push:
     branches:
       - main
