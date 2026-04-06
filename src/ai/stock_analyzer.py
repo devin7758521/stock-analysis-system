@@ -168,21 +168,28 @@ class StockAnalyzer:
             return None
     
     def apply_strategy(self, hist):
-        """应用策略逻辑：价格(3-70) + 周线量能粘合(-3%到+7%) + 5周均量向上 + 站稳25周线"""
+        """应用策略逻辑：价格(3-70) + 周线量能粘合(-3%到+7%) + 5周均量向上 + 站稳25周线 + 当日成交额>5亿"""
         try:
             CFG_VOL_LOW = -0.03
             CFG_VOL_HIGH = 0.07
+            MIN_AMOUNT = 500000000
             
             result = {
                 'price_in_range': False,
                 'volume_binding': False,
                 'volume_up': False,
                 'price_support': False,
+                'amount_ok': False,
                 'overall': False
             }
             
             current_price = hist['Close'].iloc[-1]
             result['price_in_range'] = 3.0 <= current_price <= 70.0
+            
+            if 'Amount' in hist.columns:
+                current_amount = hist['Amount'].iloc[-1]
+                result['amount_ok'] = current_amount >= MIN_AMOUNT
+                logger.info(f"当日成交额: {current_amount/100000000:.2f}亿 (要求>=5亿)")
             
             df_daily = hist.copy()
             df_daily['week'] = df_daily.index.to_period('W')
@@ -206,7 +213,7 @@ class StockAnalyzer:
                 ma125 = hist['Close'].rolling(125).mean().iloc[-1]
                 result['price_support'] = current_price > ma125
             
-            result['overall'] = result['price_in_range'] and result['volume_binding'] and result['volume_up'] and result['price_support']
+            result['overall'] = result['price_in_range'] and result['volume_binding'] and result['volume_up'] and result['price_support'] and result['amount_ok']
             
             return result
         except Exception as e:
@@ -216,6 +223,7 @@ class StockAnalyzer:
                 'volume_binding': False,
                 'volume_up': False,
                 'price_support': False,
+                'amount_ok': False,
                 'overall': False
             }
     
@@ -327,6 +335,7 @@ class StockAnalyzer:
                     report += f"  - 量能粘合: {'符合' if strategy['volume_binding'] else '不符合'}\n"
                     report += f"  - 量能向上: {'符合' if strategy['volume_up'] else '不符合'}\n"
                     report += f"  - 站稳均线: {'符合' if strategy['price_support'] else '不符合'}\n"
+                    report += f"  - 成交额>=5亿: {'符合' if strategy.get('amount_ok', False) else '不符合'}\n"
                 
                 report += "\n"
             
