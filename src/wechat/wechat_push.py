@@ -10,7 +10,8 @@ logger = logging.getLogger(__name__)
 
 class WeChatPusher:
     def __init__(self):
-        self.webhook_key = os.getenv('WECHAT_WEBHOOK_KEY')
+        self.webhook_url = os.getenv('WECHAT_WEBHOOK_URL', '')
+        self.webhook_key = os.getenv('WECHAT_WEBHOOK_KEY', '')
         self.to_user = os.getenv('WECHAT_TO_USER', '@all')
         self.corp_id = os.getenv('WECHAT_CORP_ID')
         self.app_secret = os.getenv('WECHAT_APP_SECRET')
@@ -19,12 +20,16 @@ class WeChatPusher:
         self.message_url = 'https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token='
     
     def send_wechat_webhook(self, content):
-        if not self.webhook_key:
-            logger.warning("未配置企业微信 webhook 密钥")
+        if not self.webhook_url and not self.webhook_key:
+            logger.warning("未配置企业微信 webhook")
             return False
         
         try:
-            url = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={self.webhook_key}"
+            if self.webhook_url:
+                url = self.webhook_url
+            else:
+                url = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={self.webhook_key}"
+            
             response = requests.post(url, json={"msgtype": "markdown", "markdown": {"content": content}}, timeout=10)
             result = response.json()
             
@@ -55,7 +60,7 @@ class WeChatPusher:
     
     def send_markdown_message(self, content):
         try:
-            if self.webhook_key:
+            if self.webhook_url or self.webhook_key:
                 return self.send_wechat_webhook(content)
             
             access_token = self.get_access_token()
@@ -96,3 +101,8 @@ class WeChatPusher:
         except Exception as e:
             logger.error(f"发送股票分析报告失败: {e}")
             return False
+
+if __name__ == "__main__":
+    pusher = WeChatPusher()
+    test_report = "# 股票AI分析报告\n\n## 摘要\n- 分析股票数量: 5\n- 买入建议: 2 个\n- 持有建议: 2 个\n- 卖出建议: 1 个\n"
+    pusher.send_stock_analysis_report(test_report)
