@@ -48,12 +48,12 @@ class StockAnalysisWorkflow:
                 logger.error("生成分析报告失败，工作流终止")
                 return False
             
-            # 4. 使用 Gemini API 进行深度分析
-            logger.info("正在使用 Gemini API 进行深度分析...")
-            gemini_analysis = self.analyzer.analyze_with_gemini(stocks_data)
+            # 4. 使用 Gemini API 进行深度分析（结合新闻推理）
+            logger.info("正在使用 Gemini API 进行新闻推理分析...")
+            gemini_analysis = self.analyzer.analyze_with_gemini(stocks_data, analysis_results)
             
             if gemini_analysis:
-                report += "## Gemini API 深度分析\n"
+                report += "## Gemini 新闻推理分析\n"
                 report += gemini_analysis + "\n"
             else:
                 logger.warning("Gemini API 分析失败，跳过深度分析")
@@ -73,6 +73,7 @@ class StockAnalysisWorkflow:
             return False
 
 if __name__ == "__main__":
+    # 运行工作流
     workflow = StockAnalysisWorkflow()
     success = workflow.run()
     
