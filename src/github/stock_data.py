@@ -33,13 +33,8 @@ class StockDataFetcher:
                 logger.info(f"获取到 {len(stock_list)} 只 A 股股票")
                 filtered_stocks = []
                 processed_count = 0
-                max_process = 500
                 
                 for i, stock in enumerate(stock_list):
-                    if processed_count >= max_process:
-                        logger.info(f"已处理 {max_process} 只股票，停止处理")
-                        break
-                    
                     try:
                         code = stock[0]
                         
@@ -67,7 +62,7 @@ class StockDataFetcher:
                         processed_count += 1
                         
                         if processed_count % 50 == 0:
-                            logger.info(f"处理中... {processed_count}/{max_process}")
+                            logger.info(f"处理中... 已处理 {processed_count} 只股票")
                         
                         try:
                             rs_price = bs.query_history_k_data_plus(
@@ -96,7 +91,7 @@ class StockDataFetcher:
                         continue
                 
                 logger.info(f"筛选完成，共找到 {len(filtered_stocks)} 只符合条件的股票")
-                return filtered_stocks[:50]
+                return filtered_stocks
         except Exception as e:
             logger.error(f"筛选股票失败: {e}")
             return []
