@@ -1,0 +1,44 @@
+name: Stock Analysis Workflow
+
+on:
+  schedule:
+    - cron: '0 1 * * *'
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  analyze-stocks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run stock analysis
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          WECHAT_WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL }}
+          WECHAT_APP_ID: ${{ secrets.WECHAT_APP_ID }}
+          WECHAT_APP_SECRET: ${{ secrets.WECHAT_APP_SECRET }}
+          WECHAT_AGENT_ID: ${{ secrets.WECHAT_AGENT_ID }}
+          ANALYSIS_DAYS: '800'
+          AI_MODEL: gemini-2.5-flash
+        run: python main.py
+
+      - name: Upload analysis report
+        uses: actions/upload-artifact@v4
+        with:
+          name: stock-analysis-report
+          path: analysis_report.md
+          retention-days: 7
