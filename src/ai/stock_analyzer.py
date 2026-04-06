@@ -222,16 +222,20 @@ class StockAnalyzer:
             news_sources = [
                 ("https://feedx.net/rss/sina/finance.xml", "新浪财经"),
                 ("https://feedx.net/rss/eastmoney.xml", "东方财富"),
+                ("https://feedx.net/rss/cls.cn/telegraph.xml", "财联社"),
+                ("https://feedx.net/rss/10jqka.xml", "同花顺"),
+                ("https://feedx.net/rss/securitiestimes.xml", "证券时报"),
+                ("https://feedx.net/rss/chinasecurities.xml", "中国证券报"),
             ]
             all_news = []
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
             for url, source in news_sources:
                 try:
-                    response = requests.get(url, headers=headers, timeout=10)
+                    response = requests.get(url, headers=headers, timeout=8)
                     if response.status_code == 200:
                         import xml.etree.ElementTree as ET
                         root = ET.fromstring(response.content)
-                        items = root.findall('.//item')[:4]
+                        items = root.findall('.//item')[:2]
                         for item in items:
                             title = item.find('title')
                             if title is not None and title.text:
@@ -240,7 +244,7 @@ class StockAnalyzer:
                     continue
             if all_news:
                 logger.info(f"获取到 {len(all_news)} 条财经新闻")
-                return all_news[:8]
+                return all_news[:12]
             return []
         except Exception as e:
             logger.error(f"搜索财经新闻失败: {e}")
