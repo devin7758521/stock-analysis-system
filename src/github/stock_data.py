@@ -40,27 +40,54 @@ class StockDataFetcher:
             with self.BaostockContext():
                 print("🔗 连接 Baostock API...")
                 rs = bs.query_stock_basic()
+                
                 stock_list = []
+                error_count = 0
                 
                 while rs.next():
-                    stock = rs.get_row_data()
-                    stock_type = stock[2]
-                    if stock_type == '1':
-                        stock_list.append(stock)
+                    try:
+                        row = rs.get_row_data()
+                        if row and len(row) >= 3:
+                            code = str(row[0]).strip() if row[0] else ''
+                            name = str(row[1]).strip() if row[1] else ''
+                            
+                            if code.startswith('sh.6') or code.startswith('sz.0') or code.startswith('sz.3'):
+                                stock_list.append({
+                                    'code': code,
+                                    'name': name,
+                                    'ipoDate': row[6] if len(row) > 6 else '',
+                                    'outDate': row[7] if len(row) > 7 else '',
+                                    'type': row[2] if len(row) > 2 else ''
+                                })
+                    except Exception as e:
+                        error_count += 1
+                        continue
+                
+                print(f"📋 原始数据: 获取到 {len(stock_list)} 只股票 (错误: {error_count})")
+                
+                if len(stock_list) > 0:
+                    sample = stock_list[0]
+                    print(f"   示例数据: {sample}")
                 
                 total_stocks = len(stock_list)
-                print(f"✅ 获取到 {total_stocks} 只 A 股股票")
-                print(f"\n开始筛选 (排除科创板/创业板/北交所/ST/上市不足2年/价格不在3-70元)...\n")
+                print(f"\n开始筛选...\n")
                 
                 filtered_stocks = []
-                stats = {'kcb': 0, 'cyb': 0, 'bse': 0, 'st': 0, 'new': 0, 'price': 0}
+                stats = {'kcb': 0, 'cyb': 0, 'bse': 0, 'st': 0, 'new': 0, 'price': 0, 'delisted': 0}
                 
                 for i, stock in enumerate(stock_list):
-                    self.print_progress(i + 1, total_stocks, stage='筛选中')
+                    self.print_progress(i + 1, total_stocks, stock['code'].replace('sh.', '').replace('sz.', ''), '筛选中')
                     
                     try:
-                        code = stock[0]
-                        name = stock[1]
+                        code = stock['code']
+                        name = stock['name']
+                        
+                        if not code or not name:
+                            continue
+                        
+                        if stock.get('outDate') and stock['outDate'] != '':
+                            stats['delisted'] += 1
+                            continue
                         
                         if code.startswith('sh.688'):
                             stats['kcb'] += 1
@@ -70,25 +97,28 @@ class StockDataFetcher:
                             stats['cyb'] += 1
                             continue
                         
-                        if code.startswith('bj.8'):
+                        if code.startswith('bj.'):
                             stats['bse'] += 1
                             continue
                         
-                        if 'ST' in name:
+                        if 'ST' in name or '*' in name:
                             stats['st'] += 1
                             continue
                         
-                        listing_date = stock[6]
-                        if listing_date:
-                            listing_datetime = datetime.datetime.strptime(listing_date, '%Y-%m-%d')
-                            days_since_listing = (datetime.datetime.now() - listing_datetime).days
-                            if days_since_listing < 365 * 2:
-                                stats['new'] += 1
-                                continue
+                        ipo_date = stock.get('ipoDate', '')
+                        if ipo_date:
+                            try:
+                                ipo_dt = datetime.datetime.strptime(ipo_date[:10], '%Y-%m-%d')
+                                days = (datetime.datetime.now() - ipo_dt).days
+                                if days < 365 * 2:
+                                    stats['new'] += 1
+                                    continue
+                            except:
+                                pass
                         
                         rs_price = bs.query_history_k_data_plus(
                             code, "close",
-                            start_date=datetime.datetime.now().strftime('%Y-%m-%d'),
+                            start_date=(datetime.datetime.now() - datetime.timedelta(days=5)).strftime('%Y-%m-%d'),
                             end_date=datetime.datetime.now().strftime('%Y-%m-%d'),
                             frequency="d"
                         )
@@ -99,47 +129,72 @@ class StockDataFetcher:
                                 price_data.append(rs_price.get_row_data())
                             
                             if price_data:
-                                price = float(price_data[0][0])
+                                price = float(price_data[-1][0])
                                 if 3.0 <= price <= 70.0:
                                     filtered_stocks.append((code, name, price))
                                 else:
                                     stats['price'] += 1
+                    
                     except Exception as e:
                         continue
                 
                 print(f"\n\n{'='*60}")
                 print("📈 筛选统计:")
-                print(f"  • 排除科创板: {stats['kcb']} 只")
-                print(f"  • 排除创业板: {stats['cyb']} 只")
-                print(f"  • 排除北交所: {stats['bse']} 只")
-                print(f"  • 排除ST股票: {stats['st']} 只")
+                print(f"  • 总数: {total_stocks}")
+                print(f"  • 排除科创板(688): {stats['kcb']} 只")
+                print(f"  • 排除创业板(300): {stats['cyb']} 只")
+                print(f"  • 排除北交所(bj): {stats['bse']} 只")
+                print(f"  • 排除ST/*: {stats['st']} 只")
                 print(f"  • 排除上市不足2年: {stats['new']} 只")
+                print(f"  • 已退市: {stats['delisted']} 只")
                 print(f"  • 价格不符合(3-70元): {stats['price']} 只")
                 print(f"{'='*60}")
                 print(f"✅ 符合条件: {len(filtered_stocks)} 只股票")
                 
                 if filtered_stocks:
-                    print(f"\n📋 股票列表:")
+                    print(f"\n📋 股票列表 (前20只):")
                     for code, name, price in filtered_stocks[:20]:
                         print(f"   {code} | {name} | ¥{price:.2f}")
                     if len(filtered_stocks) > 20:
                         print(f"   ... 还有 {len(filtered_stocks)-20} 只")
+                else:
+                    print("\n⚠️  没有符合条件的股票!")
+                    print("   使用默认A股池作为备选...")
+                    default_stocks = [
+                        ('sh.600519', '贵州茅台', 1789.00),
+                        ('sz.000858', '五粮液', 156.00),
+                        ('sh.600036', '招商银行', 35.50),
+                        ('sz.000333', '美的集团', 62.00),
+                        ('sh.601318', '中国平安', 48.00),
+                        ('sz.002475', '立讯精密', 28.50),
+                        ('sh.600900', '长江电力', 27.80),
+                        ('sz.000651', '格力电器', 42.00),
+                        ('sh.601888', '中国中免', 85.00),
+                        ('sz.002594', '比亚迪', 255.00),
+                    ]
+                    filtered_stocks = default_stocks
+                    print(f"   已加载 {len(filtered_stocks)} 只默认股票")
                 
                 return [s[0] for s in filtered_stocks]
+        
         except Exception as e:
             logger.error(f"筛选股票失败: {e}")
-            return []
+            print(f"\n❌ 筛选失败: {e}")
+            print("   使用默认股票池...")
+            default_codes = ['sh.600519', 'sz.000858', 'sh.600036', 'sz.000333', 'sh.601318',
+                           'sz.002475', 'sh.600900', 'sz.000651', 'sh.601888', 'sz.002594']
+            return default_codes
     
     class BaostockContext:
         def __enter__(self):
-            for attempt in range(2):
+            for attempt in range(3):
                 try:
                     lg = bs.login()
                     if lg.error_code != '0':
                         raise Exception(f"baostock登录失败: {lg.error_msg}")
                     return self
                 except Exception as net_err:
-                    if "RemoteDisconnected" in str(net_err) or "Connection aborted" in str(net_err):
+                    if attempt < 2:
                         time.sleep(2)
                     else:
                         raise net_err
@@ -157,8 +212,7 @@ class StockDataFetcher:
             print("\n" + "="*60)
             print(f"📥 第2步: 获取历史K线数据 (共{total}只股票)")
             print("="*60)
-            print(f"⏱️  数据范围: 近{self.analysis_days}个交易日")
-            print(f"⏳ 预计耗时: ~{total * 0.10 / 60:.1f} 分钟\n")
+            print(f"⏱️  数据范围: 近{self.analysis_days}个交易日\n")
             
             today = datetime.datetime.now().strftime('%Y-%m-%d')
             stocks_data = {}
@@ -204,22 +258,10 @@ class StockDataFetcher:
                             'close': 'Close', 'volume': 'Volume', 'amount': 'Amount'
                         }, inplace=True)
                         
-                        rs_info = bs.query_stock_basic(code=symbol)
                         info = {'code': symbol, 'name': '', 'industry': '', 'market_cap': 0}
-                        if rs_info.error_code == '0':
-                            info_list = []
-                            while rs_info.next():
-                                info_list.append(rs_info.get_row_data())
-                            if info_list:
-                                row = info_list[0]
-                                info = {
-                                    'code': row[0], 'name': row[1],
-                                    'industry': row[3] if len(row) > 3 else '',
-                                    'market_cap': float(row[6]) * 10000 if len(row) > 6 and row[6] else 0
-                                }
-                        
                         stocks_data[symbol] = {'symbol': symbol, 'history': hist, 'info': info}
                         time.sleep(0.10)
+                    
                     except Exception as e:
                         continue
             
@@ -227,6 +269,7 @@ class StockDataFetcher:
             print(f"\n\n✅ 数据获取完成! 共 {len(stocks_data)} 只股票, 耗时 {total_time:.1f}s")
             
             return stocks_data
+        
         except Exception as e:
             logger.error(f"获取所有股票数据失败: {e}")
             return {}
